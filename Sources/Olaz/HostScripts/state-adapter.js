@@ -128,12 +128,12 @@
         publish();
         diag('redux store attached');
       };
-      const tryAttach = () => { const s = findStore(); if (s) { attach(s); startConversations(); return true; } return false; };
+      const tryAttach = () => { const s = findStore(); if (s) { attach(s); startConversations(s); return true; } return false; };
 
       // Conversation list from the official services: conv-info-manager (index),
       // friend/group modules (names, avatars), unread-manager, preview-manager.
       let convTimer = null;
-      const startConversations = () => {
+      const startConversations = (store) => {
         if (convTimer) return;
         const regs = () => diRegistrations(req);
         const pick = (pred) => { for (const r of regs()) { const i = r.instance; if (i && typeof i === 'object') { try { if (pred(i)) return i; } catch {} } } return null; };
@@ -271,7 +271,7 @@
           const key = JSON.stringify(rows);
           if (key !== lastKey) { lastKey = key; post({ page: 'main', conversations: rows }); }
         };
-        store.subscribe(schedulePublish);
+        if (store && typeof store.subscribe === 'function') store.subscribe(schedulePublish);
         convTimer = setInterval(() => { publish().catch((e) => diag('conversations publish failed: ' + e)); }, 1500);
         publish().catch(() => {});
       };
