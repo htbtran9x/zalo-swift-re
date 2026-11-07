@@ -79,11 +79,7 @@ final class ScreenCapture {
             return
         }
         self.conversationId = conversationId
-        let request: [String: Any] = [
-            "cmd": "zalo:capture",
-            "data": ["language": "_vn", "enableSend2Me": 1, "enableAccept": 1,
-                     "viMyCloud": "Gửi vào Cloud của tôi", "enMyCloud": "Send to My Cloud"],
-        ]
+        let request = Self.captureRequest(conversationId: conversationId)
         if withOlaz {
             send(request)
         } else {
@@ -95,6 +91,16 @@ final class ScreenCapture {
                 self?.send(request)
             }
         }
+    }
+
+    /// Capturing from the inbox needs no chat target. Only direct "Gửi" requires one;
+    /// copying, saving, sharing and sending to My Cloud remain available.
+    static func captureRequest(conversationId: String) -> [String: Any] {
+        [
+            "cmd": "zalo:capture",
+            "data": ["language": "_vn", "enableSend2Me": 1, "enableAccept": conversationId.isEmpty ? 0 : 1,
+                     "viMyCloud": "Gửi vào Cloud của tôi", "enMyCloud": "Send to My Cloud"],
+        ]
     }
 
     func shutdown() {
@@ -281,7 +287,7 @@ final class ScreenCapture {
         return writeShot(png)
     }
 
-    private static func prune() {
+    static func prune() {
         let fm = FileManager.default
         guard let folders = try? fm.contentsOfDirectory(at: directory, includingPropertiesForKeys: [.creationDateKey]) else { return }
         let cutoff = Date().addingTimeInterval(-6 * 3600)

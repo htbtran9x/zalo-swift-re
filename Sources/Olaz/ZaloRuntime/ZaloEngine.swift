@@ -67,6 +67,7 @@ final class ZaloEngine {
 
     private(set) var phase: Phase = .starting
     private(set) var conversations: [ConversationSummary] = []
+    private(set) var conversationsById: [String: ConversationSummary] = [:]
     private(set) var profile: Profile?
     /// Why the session ended, shown on the login screen (e.g. kicked by another PC login).
     private(set) var signOutNotice: String?
@@ -335,11 +336,26 @@ final class ZaloEngine {
         switch state["page"] as? String {
         case "login":
             guard case .login(var login) = phase else { return }
+            let event = state["event"] as? String
             if let qr = state["qr"] as? String, let png = Self.decodeDataURL(qr) {
+                let isDirectQR = event == "qr" || event == "qr2"
+                let qrChanged = login.qrPNG != png
                 login.qrPNG = png
-                if state["event"] as? String == "qr" { login.step = .waitingScan }
+                // Multi-layer login replaces the first QR after a successful scan.
+                // Its second QR must leave any previous error/expiry state too.
+                if isDirectQR || login.step == .generating {
+                    login.step = .waitingScan
+                }
                 phase = .login(login)
-                scheduleExpiry()
+                if isDirectQR || qrChanged {
+                    scheduleExpiry()
+                }
+            } else if event == nil, state["invalid"] as? Bool == true {
+                if case .waitingScan = login.step {
+                    loginTimeout?.cancel()
+                    login.step = .expired
+                    phase = .login(login)
+                }
             }
         case "main" where state["convActions"] != nil:
             handleConversationActions(state: state)
@@ -367,7 +383,11 @@ final class ZaloEngine {
             handleChat(state: state)
         case "main" where state["conversations"] != nil:
             let rows = state["conversations"] as? [[String: Any]] ?? []
-            conversations = rows.compactMap(Self.conversation).sorted(by: Self.listOrder)
+            let sorted = rows.compactMap(Self.conversation).sorted(by: Self.listOrder)
+            if sorted != conversations {
+                conversations = sorted
+                conversationsById = Dictionary(sorted.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
+            }
         case "main":
             if let user = state["user"] as? [String: Any], let id = user["userId"] as? String, !id.isEmpty {
                 profile = Profile(
@@ -398,6 +418,11 @@ final class ZaloEngine {
         EngineLog.shared.write("qr-poll \(url.path()) error_code=\(code) data.keys=\(data.keys.sorted())")
         if let name = data["display_name"] as? String, !name.isEmpty {
             login.step = .waitingConfirm(name: name, avatar: (data["avatar"] as? String).flatMap(URL.init(string:)))
+            phase = .login(login)
+        } else if code == -20, url.path().hasSuffix("/polling/qr/waiting") {
+            // Official login-startup handles -20 by calling genSecondQR, then waits
+            // for another scan. This is a protocol transition, not a terminal error.
+            login.step = .waitingScan
             phase = .login(login)
         } else if code != 0, let message = json["error_message"] as? String, !message.isEmpty {
             login.step = .failed(message)
@@ -493,6 +518,11 @@ final class ZaloEngine {
 
     static func decodeDataURL(_ url: String) -> Data? {
         guard url.hasPrefix("data:"), let comma = url.firstIndex(of: ",") else { return nil }
-        return Data(base64Encoded: String(url[url.index(after: comma)...]))
+        let metadata = url[..<comma]
+        let payload = String(url[url.index(after: comma)...])
+        if metadata.contains(";base64") {
+            return Data(base64Encoded: payload)
+        }
+        return (payload.removingPercentEncoding ?? payload).data(using: .utf8)
     }
 }

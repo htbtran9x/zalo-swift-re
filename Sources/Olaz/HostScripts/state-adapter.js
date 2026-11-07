@@ -221,12 +221,30 @@
           }
           return textOf(p.computedMessage) || textOf(p.message) || textOf(p.content) || LABEL_BY_TYPE[Number(p.messageType)] || '';
         };
+        const previewCache = new Map();
         const previewOf = (m, id) => {
           const p = safe(() => m.preview.data.get(id), null);
-          if (!p) return null;
+          if (!p) { previewCache.delete(id); return null; }
           // Preview items (preview-manager): {message, computedMessage, messageTime, fromUid ('0' = me), messageType}.
+          const ts = Number(p.messageTime || p.sendDttm || p.ts || 0);
+          const fromMe = !!p.isMe || String(p.fromUid) === '0';
+          const type = p.messageType || p.msgType || '';
+          const rawMsg = p.computedMessage ?? p.message ?? p.content;
+          const hasFmt = !!findFormatter();
+          const hit = previewCache.get(id);
+          if (hit && hit.p === p && hit.ts === ts && hit.fromMe === fromMe && hit.type === type && hit.rawMsg === rawMsg && hit.hasFmt === hasFmt) {
+            return hit.value;
+          }
           const text = safe(() => previewText(p), '') || '';
-          return { text: String(text).slice(0, 200), ts: Number(p.messageTime || p.sendDttm || p.ts || 0), fromMe: !!p.isMe || String(p.fromUid) === '0', type: p.messageType || p.msgType || '' };
+          const value = { text: String(text).slice(0, 200), ts, fromMe, type };
+          if (previewCache.size > 5000) previewCache.clear();
+          previewCache.set(id, { p, ts, fromMe, type, rawMsg, hasFmt, value });
+          return value;
+        };
+        let pubDebounce = null;
+        const schedulePublish = () => {
+          if (pubDebounce) return;
+          pubDebounce = setTimeout(() => { pubDebounce = null; publish().catch((e) => diag('conversations publish failed: ' + e)); }, 120);
         };
         const publish = async () => {
           beginTick();
@@ -253,6 +271,7 @@
           const key = JSON.stringify(rows);
           if (key !== lastKey) { lastKey = key; post({ page: 'main', conversations: rows }); }
         };
+        store.subscribe(schedulePublish);
         convTimer = setInterval(() => { publish().catch((e) => diag('conversations publish failed: ' + e)); }, 1500);
         publish().catch(() => {});
       };
@@ -330,12 +349,14 @@
     const snapshot = () => {
       const root = document.querySelector('.login-qr-page') || document.querySelector('#app-page');
       if (!root) return null;
+      const invalid = !!root.querySelector('.qr--invalid, .qr-img-err, .off--qr-code, .login-qr__frame-qr .mask:not(.mask--none)');
+      const isUsableQrImg = (i) => i && i.src && !i.className.includes('qr-image--none') && !i.src.startsWith('data:image/svg+xml;base64,PHN2ZyB3aWR0aD0iNDIi') && (i.naturalWidth === 0 || i.naturalWidth >= 64);
       const imgs = Array.from(root.querySelectorAll('img')).filter((i) => i.src && i.naturalWidth >= 64);
-      const qrImg = root.querySelector('.qr-image img, img.qr-image, .login-qr__frame-qr img') || imgs.find((i) => i.src.startsWith('data:image/png') || i.src.startsWith('data:image/svg'));
+      const qrCandidate = root.querySelector('.qr-image img, img.qr-image, .login-qr__frame-qr img');
+      const qrImg = (isUsableQrImg(qrCandidate) ? qrCandidate : null) || imgs.find((i) => isUsableQrImg(i) && (i.src.startsWith('data:image/png') || i.src.startsWith('data:image/svg')));
       const canvas = root.querySelector('.login-qr__frame-qr canvas, .qr-code canvas');
-      let qr = qrImg ? qrImg.src : null;
-      if (!qr && canvas) { try { qr = canvas.toDataURL('image/png'); } catch {} }
-      const invalid = !!root.querySelector('.qr--invalid, .qr-img-err, .off--qr-code');
+      let qr = !invalid && qrImg ? qrImg.src : null;
+      if (!invalid && !qr && canvas) { try { qr = canvas.toDataURL('image/png'); } catch {} }
       const avatar = Array.from(root.querySelectorAll('img')).find((i) => /ava|avatar/.test(i.className + ' ' + i.src) && i !== qrImg);
       const buttons = Array.from(root.querySelectorAll('button, .z--btn--v2')).map((b) => (b.innerText || '').trim()).filter(Boolean);
       const text = (root.innerText || '').trim().replace(/\n{2,}/g, '\n').slice(0, 600);
