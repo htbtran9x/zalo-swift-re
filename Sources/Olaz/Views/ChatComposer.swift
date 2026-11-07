@@ -43,7 +43,8 @@ struct ChatComposer: View {
         typingStickers.isVisible(draft: draft, mentionListOpen: suggestionsOpen, settingEnabled: StickerSuggestState.shared.setting?.enabled)
     }
 
-    private var isEmpty: Bool { draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
+    private var staged: [StagedImage] { engine.stagedImages[conversationId] ?? [] }
+    private var isEmpty: Bool { draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && staged.isEmpty }
 
     var body: some View {
         VStack(spacing: 8) {
@@ -77,6 +78,14 @@ struct ChatComposer: View {
                 .glassEffect(.regular, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
                 .transition(.move(edge: .bottom).combined(with: .opacity))
             }
+            if !staged.isEmpty {
+                StagedImageStrip(
+                    images: staged,
+                    remove: { engine.removeStagedImage($0, in: conversationId) },
+                    clearAll: { engine.clearStagedImages(in: conversationId) }
+                )
+                .transition(.move(edge: .bottom).combined(with: .opacity))
+            }
             if suggestionsOpen {
                 MentionSuggestions(candidates: candidates, selected: $selected, pick: pick)
                     .transition(.move(edge: .bottom).combined(with: .opacity))
@@ -104,7 +113,9 @@ struct ChatComposer: View {
         .animation(.snappy(duration: 0.18), value: suggestionsOpen)
         .animation(.snappy(duration: 0.18), value: stickerStripOpen)
         .animation(.snappy(duration: 0.18), value: replyTo?.id)
+        .animation(.snappy(duration: 0.18), value: staged.map(\.id))
         .animation(.snappy(duration: 0.18), value: typingName)
+        .onChange(of: staged.count) { old, now in if now > old { handle.focus() } }
         .onAppear { ComposerTextView.accent = NSColor(ChatPalette.accent(accentStored)) }
         .onChange(of: accentStored) { _, now in ComposerTextView.accent = NSColor(ChatPalette.accent(now)) }
         .task(id: query) { await loadCandidates() }
@@ -172,7 +183,8 @@ struct ChatComposer: View {
                 onSuggestionKey: suggestionKey,
                 onPasteImages: { images in
                     guard !conversationId.isEmpty else { return }
-                    clipboardImages = ClipboardImages(conversationId: conversationId, conversationName: name, images: images)
+                    engine.stageImages(images, in: conversationId)
+                    handle.focus()
                 },
                 onSend: send)
                 .frame(height: textHeight)

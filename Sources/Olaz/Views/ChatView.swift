@@ -196,15 +196,38 @@ struct ChatView: View {
 
     private func send() {
         let text = draft.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !text.isEmpty else { return }
+        let staged = engine.takeStagedImages(for: id)
+        guard !text.isEmpty || !staged.isEmpty else { return }
         // Untrimmed draft: the engine re-bases mention offsets when it trims.
         let (sentDraft, sentMentions, sentReply) = (draft, draftMentions, replyTo)
         draft = ""
         draftMentions = []
         replyTo = nil
         sendTick += 1
-        let (engine, id) = (engine, id)
+        let (engine, id, displayName) = (engine, id, conversation.displayName)
         Task {
+            if !staged.isEmpty {
+                let singlePhotoCaption = staged.count == 1 && !text.isEmpty && sentMentions.isEmpty && sentReply == nil
+                do {
+                    let pick = try ClipboardImages(conversationId: id, conversationName: displayName, images: staged.map(\.image)).writeFiles()
+                    let outcome = await engine.sendMedia(pick.files, to: id, caption: singlePhotoCaption ? sentDraft : nil)
+                    if case .failed = outcome {
+                        engine.restoreStagedImages(staged, in: id)
+                        if singlePhotoCaption {
+                            engine.failedDrafts.stash(ComposerDraft(text: sentDraft, mentions: sentMentions, replyTo: sentReply), for: id, silent: true)
+                        }
+                    }
+                    engine.report(outcome, in: id)
+                } catch {
+                    engine.restoreStagedImages(staged, in: id)
+                    if singlePhotoCaption {
+                        engine.failedDrafts.stash(ComposerDraft(text: sentDraft, mentions: sentMentions, replyTo: sentReply), for: id, silent: true)
+                    }
+                    CardActionCenter.shared.show("Không đọc được ảnh đính kèm. Hãy thử lại.", in: id)
+                    return
+                }
+                if singlePhotoCaption || text.isEmpty { return }
+            }
             guard await !engine.sendText(sentDraft, to: id, quoting: sentReply?.id, mentions: sentMentions) else { return }
             // Nothing was sent. The view may be gone by now (conversation switched): the engine keeps the text and the
             // composer shown for this conversation takes it back (`restoreFailedDraft`).

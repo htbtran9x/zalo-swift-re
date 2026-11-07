@@ -239,7 +239,8 @@
   };
 
   // ---- the files Swift picked: a hidden file input whose open panel Swift answers ----
-  // Must run synchronously inside the call Swift makes (its user gesture); resolves [] when nothing came back.
+  // Must run synchronously inside the call Swift makes (its user gesture); when WebKit blocks `input.click()` in the
+  // offscreen WKWebView (no transient user activation), falls back after 40ms to `/__olaz/pick` served by `AsarSchemeHandler`.
   const pickFiles = () => {
     const input = document.createElement('input');
     input.type = 'file';
@@ -249,10 +250,39 @@
     (document.body || document.documentElement).appendChild(input);
     const picked = new Promise((resolve) => {
       let done = false;
-      const finish = () => { if (done) return; done = true; const list = Array.from(input.files || []); input.remove(); resolve(list); };
-      input.addEventListener('change', finish);
-      input.addEventListener('cancel', finish);
-      setTimeout(finish, 20000);
+      const finish = (files) => {
+        if (done) return;
+        done = true;
+        const list = Array.isArray(files) ? files : Array.from(input.files || []);
+        input.remove();
+        resolve(list);
+      };
+      input.addEventListener('change', () => finish());
+      input.addEventListener('cancel', () => finish());
+      setTimeout(async () => {
+        if (done) return;
+        try {
+          const res = await fetch('/__olaz/pick');
+          if (res.ok) {
+            const items = await res.json();
+            if (Array.isArray(items) && items.length) {
+              const out = [];
+              for (const it of items) {
+                const r = await fetch('/__olaz/pick/' + it.index);
+                if (!r.ok) continue;
+                const blob = await r.blob();
+                out.push(new File([blob], it.name, {
+                  type: it.type || blob.type || 'application/octet-stream',
+                  lastModified: it.lastModified || Date.now(),
+                }));
+              }
+              finish(out);
+              return;
+            }
+          }
+        } catch (e) { diag('pick fallback ' + scrubErr(e)); }
+        finish([]);
+      }, 40);
     });
     try { input.click(); } catch (e) { diag('pick ' + scrubErr(e)); }
     return picked;
@@ -287,9 +317,10 @@
     return withScope(convId, async () => {
       const files = await picked;
       if (!files.length) return { status: 'cancelled' };
-      const box = await boxOrStatus(convId, true);
+      const box = await boxOrStatus(convId, false);
       if (box.status) return box;
       if (locked(convId)) return { status: 'locked', text: LOCKED_TEXT };
+      box.cc.mouseOverChatInput = false;
       uploadAsFiles(box, files);
       diag(`files ${files.length}`);
       return { status: 'done' };
@@ -297,21 +328,34 @@
   };
 
   // Photos the official photo button takes (`supportPhoto`) go its way; videos and anything else go as files, as on Zalo PC.
-  const sendMedia = (convId) => {
+  const sendMedia = (convId, caption) => {
     const picked = pickFiles();
     convId = String(convId);
+    const title = str(caption).trim();
     return withScope(convId, async () => {
       const files = await picked;
       if (!files.length) return { status: 'cancelled' };
-      const box = await boxOrStatus(convId, true);
+      const box = await boxOrStatus(convId, false);
       if (box.status) return box;
       if (locked(convId)) return { status: 'locked', text: LOCKED_TEXT };
       if (files.length > maxFiles()) { box.cc._notifySendTooManyFile(); return { status: 'invalid' }; }
+      box.cc.mouseOverChatInput = false;
       const exts = photoExts();
       const photos = files.filter((f) => exts.includes(extOf(f.name)));
       const others = files.filter((f) => !photos.includes(f));
-      if (photos.length) await box.cc._uploadImg({ target: { files: photos, value: '' } }, Object.assign({}, box.info), SRC().Photo.CLICK_ICON_SEND_PHOTO, false);
-      if (others.length) uploadAsFiles(box, others);
+      if (photos.length === 1 && !others.length && title) {
+        const targetConv = Object.assign({}, box.info);
+        const opts = { isPasted: false, isUploaded: true, withoutPreview: true, targetConv, title, sendSource: SRC().Photo.CLICK_ICON_SEND_PHOTO };
+        try {
+          await box.cc._uploadDragPhoto(photos[0], opts);
+        } catch (e) {
+          if (!e || !e.code) throw e;
+          safe(() => M.overlimit && M.overlimit.b({ [e.code]: [photos[0]] }, box.cc.windowId, box.cc._sendOverlimitPhoto.bind(box.cc, targetConv)), null);
+        }
+      } else {
+        if (photos.length) await box.cc._uploadImg({ target: { files: photos, value: '' } }, Object.assign({}, box.info), SRC().Photo.CLICK_ICON_SEND_PHOTO, false);
+        if (others.length) uploadAsFiles(box, others);
+      }
       diag(`media photos=${photos.length} files=${others.length}`);
       return { status: 'done' };
     });
