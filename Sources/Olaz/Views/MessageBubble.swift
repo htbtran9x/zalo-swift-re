@@ -346,8 +346,30 @@ struct MessageRow: View {
                 if let text = message.copyableText {
                     Button("Copy tin nhắn", systemImage: "doc.on.doc") { engine.copyText(text, in: message.conversationId) }
                 }
-                if case .photo = message.kind {
+                if case .photo(let url, _, _) = message.kind {
+                    Button("Hiển thị trong Finder", systemImage: "folder") {
+                        Task { await ChatFiles.showPhotoInFinder(url: url, conversationId: message.conversationId, messageId: message.id, date: message.date, engine: engine) }
+                    }
+                    Button("Lưu ảnh về máy…", systemImage: "square.and.arrow.down") {
+                        Task { await ChatFiles.savePhotoAs(url: url, conversationId: message.conversationId, messageId: message.id, date: message.date, engine: engine) }
+                    }
                     Button("Copy hình ảnh", systemImage: "photo.on.rectangle") { engine.copyPhoto(message) }
+                }
+                if case .video(_, _, let url) = message.kind {
+                    Button("Hiển thị trong Finder", systemImage: "folder") {
+                        Task { await ChatFiles.showVideoInFinder(url: url, conversationId: message.conversationId, messageId: message.id, date: message.date, engine: engine) }
+                    }
+                    Button("Lưu video về máy…", systemImage: "square.and.arrow.down") {
+                        Task { await ChatFiles.saveVideoAs(url: url, conversationId: message.conversationId, messageId: message.id, date: message.date, engine: engine) }
+                    }
+                }
+                if case .voice(let url, _) = message.kind, let url {
+                    Button("Hiển thị trong Finder", systemImage: "folder") {
+                        Task { await ChatFiles.showVoiceInFinder(url: url, date: message.date) }
+                    }
+                    Button("Lưu âm thanh về máy…", systemImage: "square.and.arrow.down") {
+                        Task { await ChatFiles.saveVoiceAs(url: url, date: message.date) }
+                    }
                 }
                 if case .file(let name, _, let url) = message.kind, let url {
                     Button("Mở tệp", systemImage: "arrow.up.right.square") {

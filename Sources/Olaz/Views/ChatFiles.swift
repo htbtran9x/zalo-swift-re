@@ -2,7 +2,7 @@ import AppKit
 import Foundation
 import UniformTypeIdentifiers
 
-/// Utilities for managing chat files (saving to ~/Downloads/Olaz, opening, revealing in Finder, Save As).
+/// Utilities for managing chat media and files (saving to ~/Downloads/Olaz, opening, revealing in Finder, Save As).
 enum ChatFiles {
     /// Dedicated download folder: ~/Downloads/Olaz
     static var downloadsDirectory: URL {
@@ -12,29 +12,10 @@ enum ChatFiles {
         return dir
     }
 
-    /// Prepares the file in ~/Downloads/Olaz with its original display name.
-    static func localFile(for url: URL, displayName: String) async throws -> URL {
-        let cached = try await MediaLoader.shared.localFile(for: url)
-        let fm = FileManager.default
-        let safeName = sanitizeFilename(displayName)
-        let target = downloadsDirectory.appendingPathComponent(safeName)
-
-        if fm.fileExists(atPath: target.path) {
-            let cachedSize = (try? fm.attributesOfItem(atPath: cached.path)[.size] as? Int64) ?? 0
-            let targetSize = (try? fm.attributesOfItem(atPath: target.path)[.size] as? Int64) ?? 0
-            if cachedSize == targetSize && cachedSize > 0 {
-                return target
-            }
-        }
-
-        try? fm.removeItem(at: target)
-        do {
-            try fm.copyItem(at: cached, to: target)
-            MediaLoader.applyQuarantine(to: target, origin: url)
-            return target
-        } catch {
-            return cached
-        }
+    static func timestampString(for date: Date = Date()) -> String {
+        let formatter = DateFormatter()
+        formatter.dateFormat = "yyyyMMdd_HHmmss"
+        return formatter.string(for: date) ?? "\(Int(date.timeIntervalSince1970))"
     }
 
     static func sanitizeFilename(_ name: String) -> String {
@@ -45,7 +26,40 @@ enum ChatFiles {
         return base
     }
 
-    /// Shows the file in Finder (downloading first if needed).
+    /// Stages a file into ~/Downloads/Olaz with a friendly display name.
+    static func stageToDownloads(_ source: URL, displayName: String) throws -> URL {
+        let fm = FileManager.default
+        let safeName = sanitizeFilename(displayName)
+        let target = downloadsDirectory.appendingPathComponent(safeName)
+
+        if fm.fileExists(atPath: target.path) {
+            let srcSize = (try? fm.attributesOfItem(atPath: source.path)[.size] as? Int64) ?? 0
+            let targetSize = (try? fm.attributesOfItem(atPath: target.path)[.size] as? Int64) ?? 0
+            if srcSize == targetSize && srcSize > 0 {
+                return target
+            }
+        }
+
+        try? fm.removeItem(at: target)
+        do {
+            try fm.copyItem(at: source, to: target)
+            return target
+        } catch {
+            return source
+        }
+    }
+
+    // MARK: - Generic Files
+
+    /// Prepares the file in ~/Downloads/Olaz with its original display name.
+    static func localFile(for url: URL, displayName: String) async throws -> URL {
+        let cached = try await MediaLoader.shared.localFile(for: url)
+        let staged = try stageToDownloads(cached, displayName: displayName)
+        MediaLoader.applyQuarantine(to: staged, origin: url)
+        return staged
+    }
+
+    /// Shows a received file in Finder (downloading first if needed).
     @MainActor
     @discardableResult
     static func showInFinder(url: URL, displayName: String) async -> URL? {
@@ -75,34 +89,158 @@ enum ChatFiles {
         }
     }
 
-    /// Prompts the user with NSSavePanel to save the file to a location of their choice.
+    // MARK: - Photos
+
+    @MainActor
+    @discardableResult
+    static func showPhotoInFinder(url: URL?, conversationId: String, messageId: String, date: Date, engine: ZaloEngine) async -> URL? {
+        do {
+            let local = try await resolvePhotoFile(url: url, conversationId: conversationId, messageId: messageId, engine: engine)
+            let ext = local.pathExtension.isEmpty ? "jpg" : local.pathExtension
+            let name = "Zalo_\(timestampString(for: date)).\(ext)"
+            let staged = try stageToDownloads(local, displayName: name)
+            NSWorkspace.shared.activateFileViewerSelecting([staged])
+            return staged
+        } catch {
+            return nil
+        }
+    }
+
+    @MainActor
+    static func savePhotoAs(url: URL?, conversationId: String, messageId: String, date: Date, engine: ZaloEngine) async {
+        do {
+            let local = try await resolvePhotoFile(url: url, conversationId: conversationId, messageId: messageId, engine: engine)
+            let ext = local.pathExtension.isEmpty ? "jpg" : local.pathExtension
+            let name = "Zalo_\(timestampString(for: date)).\(ext)"
+            let staged = try stageToDownloads(local, displayName: name)
+            await saveAs(file: staged, displayName: name)
+        } catch {}
+    }
+
+    private static func resolvePhotoFile(url: URL?, conversationId: String, messageId: String, engine: ZaloEngine) async throws -> URL {
+        if let url, url.query?.contains("e2esession") != true {
+            if let cached = try? await MediaLoader.shared.localFile(for: url) {
+                return cached
+            }
+        }
+        if case .file(let file) = await engine.resolveMedia(conversationId: conversationId, messageId: messageId, kind: .photo, force: false) {
+            return file
+        }
+        if let url {
+            return try await MediaLoader.shared.localFile(for: url)
+        }
+        throw URLError(.cannotOpenFile)
+    }
+
+    // MARK: - Videos
+
+    @MainActor
+    @discardableResult
+    static func showVideoInFinder(url: URL?, localFile: URL? = nil, conversationId: String, messageId: String, date: Date, engine: ZaloEngine) async -> URL? {
+        do {
+            let local: URL
+            if let localFile, FileManager.default.fileExists(atPath: localFile.path) {
+                local = localFile
+            } else {
+                local = try await resolveVideoFile(url: url, conversationId: conversationId, messageId: messageId, engine: engine)
+            }
+            let ext = local.pathExtension.isEmpty ? "mp4" : local.pathExtension
+            let name = "Video_\(timestampString(for: date)).\(ext)"
+            let staged = try stageToDownloads(local, displayName: name)
+            NSWorkspace.shared.activateFileViewerSelecting([staged])
+            return staged
+        } catch {
+            return nil
+        }
+    }
+
+    @MainActor
+    static func saveVideoAs(url: URL?, localFile: URL? = nil, conversationId: String, messageId: String, date: Date, engine: ZaloEngine) async {
+        do {
+            let local: URL
+            if let localFile, FileManager.default.fileExists(atPath: localFile.path) {
+                local = localFile
+            } else {
+                local = try await resolveVideoFile(url: url, conversationId: conversationId, messageId: messageId, engine: engine)
+            }
+            let ext = local.pathExtension.isEmpty ? "mp4" : local.pathExtension
+            let name = "Video_\(timestampString(for: date)).\(ext)"
+            let staged = try stageToDownloads(local, displayName: name)
+            await saveAs(file: staged, displayName: name)
+        } catch {}
+    }
+
+    private static func resolveVideoFile(url: URL?, conversationId: String, messageId: String, engine: ZaloEngine) async throws -> URL {
+        if case .file(let file) = await engine.resolveMedia(conversationId: conversationId, messageId: messageId, kind: .video, force: false) {
+            return file
+        }
+        if let url {
+            return try await MediaLoader.shared.localFile(for: url)
+        }
+        throw URLError(.cannotOpenFile)
+    }
+
+    // MARK: - Voice
+
+    @MainActor
+    @discardableResult
+    static func showVoiceInFinder(url: URL, date: Date) async -> URL? {
+        do {
+            let local = try await MediaLoader.shared.localFile(for: url)
+            let ext = local.pathExtension.isEmpty ? "m4a" : local.pathExtension
+            let name = "Voice_\(timestampString(for: date)).\(ext)"
+            let staged = try stageToDownloads(local, displayName: name)
+            NSWorkspace.shared.activateFileViewerSelecting([staged])
+            return staged
+        } catch {
+            return nil
+        }
+    }
+
+    @MainActor
+    static func saveVoiceAs(url: URL, date: Date) async {
+        do {
+            let local = try await MediaLoader.shared.localFile(for: url)
+            let ext = local.pathExtension.isEmpty ? "m4a" : local.pathExtension
+            let name = "Voice_\(timestampString(for: date)).\(ext)"
+            let staged = try stageToDownloads(local, displayName: name)
+            await saveAs(file: staged, displayName: name)
+        } catch {}
+    }
+
+    // MARK: - Save Dialog & Clipboard
+
     @MainActor
     static func saveAs(url: URL, displayName: String, window: NSWindow? = nil) async {
         do {
             let file = try await localFile(for: url, displayName: displayName)
-            let panel = NSSavePanel()
-            panel.title = "Lưu tệp về máy"
-            panel.prompt = "Lưu"
-            panel.canCreateDirectories = true
-            panel.nameFieldStringValue = sanitizeFilename(displayName)
-            if let type = UTType(filenameExtension: (displayName as NSString).pathExtension) {
-                panel.allowedContentTypes = [type]
-            }
-            let response: NSApplication.ModalResponse = await withCheckedContinuation { continuation in
-                if let window = window ?? NSApp.keyWindow {
-                    panel.beginSheetModal(for: window) { continuation.resume(returning: $0) }
-                } else {
-                    continuation.resume(returning: panel.runModal())
-                }
-            }
-            if response == .OK, let dest = panel.url {
-                try? FileManager.default.removeItem(at: dest)
-                try FileManager.default.copyItem(at: file, to: dest)
-            }
+            await saveAs(file: file, displayName: displayName, window: window)
         } catch {}
     }
 
-    /// Copies the file to the system clipboard (as a file URL).
+    @MainActor
+    static func saveAs(file: URL, displayName: String, window: NSWindow? = nil) async {
+        let panel = NSSavePanel()
+        panel.title = "Lưu tệp về máy"
+        panel.prompt = "Lưu"
+        panel.canCreateDirectories = true
+        panel.nameFieldStringValue = sanitizeFilename(displayName)
+        if let type = UTType(filenameExtension: (displayName as NSString).pathExtension) {
+            panel.allowedContentTypes = [type]
+        }
+        let response: NSApplication.ModalResponse = await withCheckedContinuation { continuation in
+            if let window = window ?? NSApp.keyWindow {
+                panel.beginSheetModal(for: window) { continuation.resume(returning: $0) }
+            } else {
+                continuation.resume(returning: panel.runModal())
+            }
+        }
+        if response == .OK, let dest = panel.url {
+            try? FileManager.default.removeItem(at: dest)
+            try? FileManager.default.copyItem(at: file, to: dest)
+        }
+    }
+
     @MainActor
     static func copyFile(url: URL, displayName: String) async {
         do {
