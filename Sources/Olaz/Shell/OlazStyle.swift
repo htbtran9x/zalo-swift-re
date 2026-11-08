@@ -24,6 +24,8 @@ enum OlazPrefs {
     static let didFinishSetup = "olaz.didFinishSetup"
     /// A fresh QR sign-in happened and the setup's sync / welcome steps are still due (survives a relaunch).
     static let setupPending = "olaz.setupPending"
+    /// Global screenshot hotkey enabled (⌥⌘S).
+    static let globalScreenshot = "olaz.globalScreenshot"
 }
 
 /// Accent color picked in Settings ▸ Giao diện; applied with `.tint` at the window root, so views use `.tint` /

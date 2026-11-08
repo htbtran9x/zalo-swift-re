@@ -40,6 +40,7 @@ final class ScreenCapture {
     /// The conversation of the running capture; nil while idle.
     private var conversationId: String?
     private var hidOlaz = false
+    private var wasActiveBeforeCapture = false
     private var terminationObserver: NSObjectProtocol?
 
     nonisolated static func helperExecutable(appURL: URL = OfficialZaloInstall.defaultAppURL) -> URL {
@@ -79,6 +80,7 @@ final class ScreenCapture {
             return
         }
         self.conversationId = conversationId
+        wasActiveBeforeCapture = NSApp.isActive
         let request = Self.captureRequest(conversationId: conversationId)
         if withOlaz {
             send(request)
@@ -108,7 +110,7 @@ final class ScreenCapture {
         if process?.isRunning == true { process?.terminate() }
         process = nil
         stdin = nil
-        finish()
+        finish(activate: false)
     }
 
     // MARK: Process
@@ -142,7 +144,7 @@ final class ScreenCapture {
                     self.log("capture: tool exited \(status)")
                     self.process = nil
                     self.stdin = nil
-                    self.finish()
+                    self.finish(activate: self.wasActiveBeforeCapture)
                 }
             }
         }
@@ -222,9 +224,9 @@ final class ScreenCapture {
             finish()
             if !text.isEmpty { onOutcome?(.shareText(text, conversationId: conversation)) }
         case "cap:cancelScrs", "cap:quitAction":
-            finish()
+            finish(activate: wasActiveBeforeCapture)
         case "cap:noPermission":
-            finish()
+            finish(activate: true)
             onOutcome?(.noPermission)
         case "cap:ocrRequest":
             // Main asks its OCR service; there is none here.
@@ -241,7 +243,7 @@ final class ScreenCapture {
     /// The shot the tool left on the clipboard, written as PNG (main: `getClipboardImage().toPNG()`).
     private func deliver(_ outcome: (URL) -> Outcome) {
         let conversation = conversationId ?? ""
-        finish()
+        finish(activate: true)
         guard let png = Self.clipboardPNG(), let url = Self.writeShot(png) else {
             onOutcome?(.failed("Không lấy được ảnh chụp màn hình. Hãy thử lại.", conversationId: conversation))   // STR_TOAST_ERROR
             return
@@ -250,11 +252,11 @@ final class ScreenCapture {
     }
 
     /// Ends the running capture and brings Olaz back (main's restore + `bringOnTop`).
-    private func finish() {
+    private func finish(activate: Bool = true) {
         guard conversationId != nil || hidOlaz else { return }
         conversationId = nil
         if hidOlaz { hidOlaz = false; NSApp.unhide(nil) }
-        NSApp.activate()
+        if activate { NSApp.activate() }
     }
 
     // MARK: Files

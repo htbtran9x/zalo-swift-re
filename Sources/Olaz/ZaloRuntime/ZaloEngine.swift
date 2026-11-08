@@ -68,7 +68,13 @@ final class ZaloEngine {
         var displayName: String { name.isEmpty ? (isGroup ? "Nhóm" : "Người dùng Zalo") : name }
     }
 
-    private(set) var phase: Phase = .starting
+    private(set) var phase: Phase = .starting {
+        didSet {
+            if phase == .ready || oldValue == .ready {
+                updateScreenshotHotKey()
+            }
+        }
+    }
     private(set) var conversations: [ConversationSummary] = []
     private(set) var conversationsById: [String: ConversationSummary] = [:]
     /// `conversations` by id: the adapter posts only the rows that changed (`reset` replaces everything).
@@ -131,6 +137,7 @@ final class ZaloEngine {
     var screenshotShare: ScreenshotShare?
     var screenCaptureNeedsPermission = false
     @ObservationIgnored internal var screenCaptureTool: ScreenCapture?
+    @ObservationIgnored internal var screenshotHotKey: GlobalHotKey?
     /// Images pasted with ⌘V or accepted from the screenshot tool, staged in the conversation's composer tray.
     var stagedImages: [String: [StagedImage]] = [:]
     /// Message context-menu actions (ZaloEngine+MessageActions.swift): the "Chia sẻ" picker, a confirm they ask, the undo of the last

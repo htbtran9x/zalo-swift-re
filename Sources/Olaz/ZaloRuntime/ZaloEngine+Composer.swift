@@ -186,6 +186,40 @@ extension ZaloEngine {
 
     // MARK: Screenshot
 
+    /// System-wide screenshot hotkey setting (defaults to true).
+    static var isGlobalScreenshotEnabled: Bool {
+        get { UserDefaults.standard.object(forKey: OlazPrefs.globalScreenshot) as? Bool ?? true }
+        set { UserDefaults.standard.set(newValue, forKey: OlazPrefs.globalScreenshot) }
+    }
+
+    /// Registers or unregisters the global ⌥⌘S hotkey based on ready phase and user preference.
+    func updateScreenshotHotKey() {
+        if phase == .ready && Self.isGlobalScreenshotEnabled {
+            if screenshotHotKey == nil {
+                let hotKey = GlobalHotKey { [weak self] in
+                    self?.triggerGlobalScreenshot()
+                }
+                if hotKey.register() {
+                    screenshotHotKey = hotKey
+                    EngineLog.shared.write("screenshot: global hotkey registered (⌘⌥S)")
+                }
+            }
+        } else {
+            if let hotKey = screenshotHotKey {
+                hotKey.unregister()
+                screenshotHotKey = nil
+                EngineLog.shared.write("screenshot: global hotkey unregistered")
+            }
+        }
+    }
+
+    /// Triggered globally via ⌥⌘S, regardless of which application currently has focus.
+    func triggerGlobalScreenshot() {
+        guard phase == .ready else { return }
+        let id = openConversationId.flatMap { isConversationLocked($0) ? nil : $0 } ?? ""
+        startScreenCapture(in: id, withOlaz: true)
+    }
+
     /// Starts the official screenshot tool for the conversation `id`; the result arrives through `handleCapture`.
     func startScreenCapture(in id: String, withOlaz: Bool) {
         screenCapture().start(in: id, withOlaz: withOlaz)
