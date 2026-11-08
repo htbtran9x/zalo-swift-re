@@ -851,13 +851,32 @@ struct ComposerTextView: NSViewRepresentable {
                   !isHiddenOrHasHiddenAncestor,
                   let window = self.window,
                   event.window === window,
-                  window.attachedSheet == nil,
-                  !(window.firstResponder is NSTextView) else {
+                  window.attachedSheet == nil else {
+                return false
+            }
+            if let other = window.firstResponder as? NSTextView, other !== self, other.isEditable {
                 return false
             }
             let flags = event.modifierFlags.intersection([.command, .option, .control, .shift])
-            if (event.keyCode == 36 || event.keyCode == 76), flags.isEmpty,
-               hasStagedImages || !string.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            guard (event.keyCode == 36 || event.keyCode == 76), flags.isEmpty else {
+                return false
+            }
+            if window.firstResponder === self {
+                if !hasMarkedText() {
+                    if onSuggestionKey?(.confirm) == true { return true }
+                    onSend?()
+                    return true
+                } else if hasStagedImages {
+                    inputContext?.discardMarkedText()
+                    unmarkText()
+                    delegate?.textDidChange?(Notification(name: NSText.didChangeNotification, object: self))
+                    if onSuggestionKey?(.confirm) == true { return true }
+                    onSend?()
+                    return true
+                }
+                return false
+            }
+            if hasStagedImages || !string.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
                 window.makeFirstResponder(self)
                 if onSuggestionKey?(.confirm) == true { return true }
                 onSend?()
@@ -909,6 +928,7 @@ struct ComposerTextView: NSViewRepresentable {
             guard isEditable, let onPasteImages else { return false }
             let images = ClipboardImages.read(from: board)
             guard !images.isEmpty else { return false }
+            hasStagedImages = true
             onPasteImages(images)
             return true
         }

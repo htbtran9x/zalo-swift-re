@@ -271,11 +271,16 @@
                 const r = await fetch('/__olaz/pick/' + it.index);
                 if (!r.ok) continue;
                 const blob = await r.blob();
-                out.push(new File([blob], it.name, {
+                const file = new File([blob], it.name, {
                   type: it.type || blob.type || 'application/octet-stream',
                   lastModified: it.lastModified || Date.now(),
-                }));
+                });
+                if (it.path) {
+                  try { Object.defineProperty(file, 'path', { value: it.path, configurable: true }); } catch {}
+                }
+                out.push(file);
               }
+              diag(`pick fallback files=${out.length}`);
               finish(out);
               return;
             }

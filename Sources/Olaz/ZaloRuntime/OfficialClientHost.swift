@@ -281,6 +281,7 @@ final class AsarSchemeHandler: NSObject, WKURLSchemeHandler {
                 return [
                     "index": index,
                     "name": fileURL.lastPathComponent,
+                    "path": fileURL.path,
                     "type": Self.mime(for: fileURL.path),
                     "lastModified": Int64((mtime.timeIntervalSince1970 * 1000).rounded()),
                 ]
