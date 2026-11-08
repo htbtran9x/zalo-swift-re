@@ -205,13 +205,17 @@ struct ChatView: View {
         replyTo = nil
         sendTick += 1
         let (engine, id, displayName) = (engine, id, conversation.displayName)
+        EngineLog.shared.write("chat send text=\(!text.isEmpty) staged=\(staged.count)")
         Task {
             if !staged.isEmpty {
                 let singlePhotoCaption = staged.count == 1 && !text.isEmpty && sentMentions.isEmpty && sentReply == nil
                 do {
                     let pick = try ClipboardImages(conversationId: id, conversationName: displayName, images: staged.map(\.image)).writeFiles()
                     let outcome = await engine.sendMedia(pick.files, to: id, caption: singlePhotoCaption ? sentDraft : nil)
-                    if case .failed = outcome {
+                    switch outcome {
+                    case .done, .pending:
+                        break
+                    case .failed, .cancelled:
                         engine.restoreStagedImages(staged, in: id)
                         if singlePhotoCaption {
                             engine.failedDrafts.stash(ComposerDraft(text: sentDraft, mentions: sentMentions, replyTo: sentReply), for: id, silent: true)
