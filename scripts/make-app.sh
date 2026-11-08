@@ -60,11 +60,16 @@ cat > "$APP/Contents/Info.plist" << PLIST
 PLIST
 
 # Sign with the JIT entitlement so JavaScriptCore can JIT the JS modules.
-# OLAZ_SIGN_IDENTITY="Developer ID Application: ..." (set by scripts/release.sh) signs for distribution:
-# hardened runtime + secure timestamp are what notarization requires. Unset = ad-hoc dev build.
-if [[ -n "${OLAZ_SIGN_IDENTITY:-}" ]]; then
-    codesign --force --timestamp --options runtime --sign "$OLAZ_SIGN_IDENTITY" \
-        --entitlements scripts/Olaz.entitlements "$APP"
+# Signing identity: OLAZ_SIGN_IDENTITY, or auto-detect a local certificate (Apple Development, OlazDev),
+# or fall back to ad-hoc signing (`-`).
+SIGN_IDENTITY="${OLAZ_SIGN_IDENTITY:-}"
+if [[ -z "$SIGN_IDENTITY" ]]; then
+    SIGN_IDENTITY=$(security find-identity -v -p codesigning 2>/dev/null | grep -E 'Apple Development|OlazDev|LocalDev' | head -n1 | sed -E 's/.*"([^"]+)".*/\1/' || true)
+fi
+
+if [[ -n "$SIGN_IDENTITY" ]]; then
+    echo "Signing with identity: $SIGN_IDENTITY"
+    codesign --force --sign "$SIGN_IDENTITY" --entitlements scripts/Olaz.entitlements "$APP"
 else
     codesign --force --sign - --entitlements scripts/Olaz.entitlements "$APP"
 fi
