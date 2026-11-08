@@ -275,9 +275,6 @@
                   type: it.type || blob.type || 'application/octet-stream',
                   lastModified: it.lastModified || Date.now(),
                 });
-                if (it.path) {
-                  try { Object.defineProperty(file, 'path', { value: it.path, configurable: true }); } catch {}
-                }
                 out.push(file);
               }
               diag(`pick fallback files=${out.length}`);
@@ -291,6 +288,26 @@
     });
     try { input.click(); } catch (e) { diag('pick ' + scrubErr(e)); }
     return picked;
+  };
+
+  // The photo processor encodes uploads to JXL. On macOS >= `jxl.osx_native_target` it takes the native route, a CrossEnvTask to
+  // Electron's utility process that this host does not have: the task is queued and never answers, so the photo never leaves
+  // `process()` (the single-slot JXL bucket stays taken too). The official code falls back to its WASM codec when the native
+  // route *fails*, so the utility-process tasks are made to fail at once.
+  let jxlPatched = false;
+  const failJxlNativeTasks = () => {
+    if (jxlPatched) return;
+    const req = window.__zaloRequire;
+    if (typeof req !== 'function') return;
+    safe(() => {
+      const lib = req('rJMU');
+      for (const k of ['EncodeJxlTask', 'DecodeJxlTask', 'DecodeJxlSingleTask', 'GetJxlInfoTask', 'ResizeJxlTask']) {
+        const C = lib[k];
+        if (C && C.prototype) C.prototype.run = () => Promise.reject(new Error('no utility process'));
+      }
+      jxlPatched = true;
+      diag('jxl native tasks → wasm fallback');
+    }, null);
   };
 
   const extOf = (name) => { const s = str(name); const i = s.lastIndexOf('.'); return i < 0 ? '' : s.slice(i + 1).toLowerCase(); };
@@ -317,6 +334,7 @@
   };
 
   const sendFiles = (convId) => {
+    failJxlNativeTasks();
     const picked = pickFiles();
     convId = String(convId);
     return withScope(convId, async () => {
@@ -334,6 +352,7 @@
 
   // Photos the official photo button takes (`supportPhoto`) go its way; videos and anything else go as files, as on Zalo PC.
   const sendMedia = (convId, caption) => {
+    failJxlNativeTasks();
     const picked = pickFiles();
     convId = String(convId);
     const title = str(caption).trim();
@@ -380,6 +399,7 @@
     }
   };
   const sendShot = (convId, toMe) => {
+    failJxlNativeTasks();
     const picked = pickFiles();
     convId = String(convId);
     return withScope(convId, async () => {
@@ -397,6 +417,7 @@
   };
   // "Chia sẻ": the shot to each chosen conversation (`handleForwardScreenCap` callback: `sendPhotoMessage(blob, {targetConv})`).
   const shareShot = (convIds) => {
+    failJxlNativeTasks();
     const picked = pickFiles();
     const ids = (Array.isArray(convIds) ? convIds : []).map(String).filter(Boolean);
     return withScope(ids[0] || '', async () => {
