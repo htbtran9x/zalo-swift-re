@@ -37,6 +37,9 @@ final class ZaloEngine {
         }
         var step: Step = .generating
         var qrPNG: Data?
+        /// The server asked for a second scan (`error_code -20`, multi-layer QR for device linking): the QR on screen
+        /// is QR2, which the phone must scan before the login can be confirmed.
+        var isSecondQR = false
     }
 
     struct Profile: Equatable {
@@ -68,6 +71,8 @@ final class ZaloEngine {
     private(set) var phase: Phase = .starting
     private(set) var conversations: [ConversationSummary] = []
     private(set) var conversationsById: [String: ConversationSummary] = [:]
+    /// `conversations` by id: the adapter posts only the rows that changed (`reset` replaces everything).
+    @ObservationIgnored private var conversationIndex: [String: ConversationSummary] = [:]
     private(set) var profile: Profile?
     /// Why the session ended, shown on the login screen (e.g. kicked by another PC login).
     private(set) var signOutNotice: String?
@@ -246,7 +251,7 @@ final class ZaloEngine {
             }
         }
         host.bridge.trace = { key, args in
-            guard !key.contains("ZLog"), !key.hasPrefix("$zelectron.store") else { return }
+            guard !key.contains("ZLog"), !key.hasPrefix("$zelectron.store"), !key.hasPrefix("$olazSqlite") else { return }
             log.write("bridge \(key)\(EngineLog.shape(args))")
         }
         host.bridge.onHandlerError = { key, error in log.write("bridge-error \(key): \(error.localizedDescription)") }
@@ -273,11 +278,24 @@ final class ZaloEngine {
         host.load(.login, query: mainProcess.pageQuery())
     }
 
+    /// Where the official client keeps its databases (Settings ▸ Engine).
+    var storageBackend: ZaloMainProcess.StorageBackend? { mainProcess?.storage }
+
+    /// Moves this install to the native SQLite backend: the account is logged out and starts over on SQLite at the
+    /// next login (history comes back with the phone → PC sync).
+    func switchToSQLite() {
+        mainProcess?.switchStorage(.sqlite)
+        logOut()
+    }
+
     /// Clears the session cookies and local client data, then shows a fresh QR.
     func logOut() {
         ZaloMainProcess.clearCookies()
         mainProcess?.resetAccountState()
         profile = nil
+        conversations = []
+        conversationsById = [:]
+        conversationIndex = [:]
         resetConversationActions()
         resetCloud()
         resetPolls()
@@ -339,14 +357,32 @@ final class ZaloEngine {
         case "login":
             guard case .login(var login) = phase else { return }
             let event = state["event"] as? String
+            // The official page gave up on this QR (its poller ran out of `qr_retry`): it is no longer watched, so a
+            // scan would do nothing. Only from waiting-scan — after an accepted login the page also shows this state.
+            if state["invalid"] as? Bool == true, case .waitingScan = login.step {
+                loginTimeout?.cancel()
+                login.step = .expired
+                phase = .login(login)
+                return
+            }
             if let qr = state["qr"] as? String, let png = Self.decodeDataURL(qr) {
                 let isDirectQR = event == "qr" || event == "qr2"
                 let qrChanged = login.qrPNG != png
                 login.qrPNG = png
-                // Multi-layer login replaces the first QR after a successful scan.
-                // Its second QR must leave any previous error/expiry state too.
-                if isDirectQR || login.step == .generating {
+                switch event {
+                case "qr":
                     login.step = .waitingScan
+                    login.isSecondQR = false
+                case "qr2":
+                    // The official page generated the second QR after the server's -20; the user scans again.
+                    login.step = .waitingScan
+                    login.isSecondQR = true
+                default:
+                    // Multi-layer login replaces the first QR after a successful scan.
+                    // Its second QR must leave any previous error/expiry state too.
+                    if isDirectQR || login.step == .generating {
+                        login.step = .waitingScan
+                    }
                 }
                 phase = .login(login)
                 if isDirectQR || qrChanged {
@@ -384,12 +420,7 @@ final class ZaloEngine {
         case "main" where state["chat"] != nil || state["typing"] != nil:
             handleChat(state: state)
         case "main" where state["conversations"] != nil:
-            let rows = state["conversations"] as? [[String: Any]] ?? []
-            let sorted = rows.compactMap(Self.conversation).sorted(by: Self.listOrder)
-            if sorted != conversations {
-                conversations = sorted
-                conversationsById = Dictionary(sorted.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
-            }
+            mergeConversations(state)
         case "main":
             if let user = state["user"] as? [String: Any], let id = user["userId"] as? String, !id.isEmpty {
                 profile = Profile(
@@ -418,6 +449,11 @@ final class ZaloEngine {
         let data = json["data"] as? [String: Any] ?? json
         let code = (json["error_code"] as? NSNumber)?.intValue ?? 0
         EngineLog.shared.write("qr-poll \(url.path()) error_code=\(code) data.keys=\(data.keys.sorted())")
+        // -20 is not an error: the first scan succeeded, but this account logs in with a second QR (device linking,
+        // "multi layer QR login mode"). The official poller turns `data` into QR2 via `genSecondQR` and keeps waiting
+        // for a scan; the page adapter forwards it as `event: "qr2"`. Its `error_message` ("Vui lòng thử lại QR mới.")
+        // must not be shown as a failure.
+        if code == Self.secondQRRequiredCode { return }
         if let name = data["display_name"] as? String, !name.isEmpty {
             login.step = .waitingConfirm(name: name, avatar: (data["avatar"] as? String).flatMap(URL.init(string:)))
             phase = .login(login)
@@ -432,7 +468,12 @@ final class ZaloEngine {
         }
     }
 
-    /// The server sets `qr_timeout`; mirror the official page's expiry UI.
+    /// `qr-id` poll result meaning "scanned once; show the second (device-linking) QR" — see `Dr`/`genSecondQR` in the
+    /// official `login-startup` chunk.
+    static let secondQRRequiredCode = -20
+
+    /// Fallback only: the page's own expiry (`invalid` above, ~1 min: `qr_retry` × ~21 s long-polls answered 408)
+    /// normally arrives first. This catches a page whose expiry marker we no longer recognise.
     private func scheduleExpiry() {
         loginTimeout?.cancel()
         loginTimeout = Task { [weak self] in
@@ -488,6 +529,24 @@ final class ZaloEngine {
     private func log(_ line: String) {
         recentLog.append(line)
         if recentLog.count > 200 { recentLog.removeFirst(recentLog.count - 200) }
+    }
+
+    /// The conversation list arrives as deltas (state-adapter.js): `conversations` holds the rows that changed since the
+    /// last post, `removed` the ids that left the official index, `reset` (or the legacy full-list shape without it) replaces
+    /// the whole list. A large account has thousands of rows and some preview changes every tick: merging by id keeps the
+    /// bridge payload and the SwiftUI invalidation proportional to what changed.
+    private func mergeConversations(_ state: [String: Any]) {
+        let rows = (state["conversations"] as? [[String: Any]] ?? []).compactMap(Self.conversation)
+        let reset = state["reset"] as? Bool ?? (state["removed"] == nil)
+        let removed = state["removed"] as? [String] ?? []
+        var index = reset ? [:] : conversationIndex
+        for id in removed { index.removeValue(forKey: id) }
+        for row in rows { index[row.id] = row }
+        guard reset || index != conversationIndex else { return }
+        conversationIndex = index
+        conversationsById = index
+        let sorted = index.values.sorted(by: Self.listOrder)
+        if sorted != conversations { conversations = sorted }
     }
 
     private static func conversation(_ row: [String: Any]) -> ConversationSummary? {
