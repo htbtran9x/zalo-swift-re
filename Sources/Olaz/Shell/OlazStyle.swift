@@ -136,6 +136,13 @@ enum OlazAssets {
 }
 
 /// Message text scale from Settings ▸ Giao diện ▸ Cỡ chữ.
+private struct OlazTextScaleKey: EnvironmentKey {
+    static let defaultValue: CGFloat = 1
+}
+
 extension EnvironmentValues {
-    @Entry var olazTextScale: CGFloat = 1
+    var olazTextScale: CGFloat {
+        get { self[OlazTextScaleKey.self] }
+        set { self[OlazTextScaleKey.self] = newValue }
+    }
 }

@@ -10,7 +10,11 @@ BUNDLE_ID="app.olaz.mac"
 # Marketing version and build number; scripts/release.sh sets them for a tagged release.
 VERSION="${OLAZ_VERSION:-1.0}"
 BUILD_NUMBER="${OLAZ_BUILD:-$VERSION}"
-swift build -c "$CONFIG"
+SDK_ARGS=()
+if [[ -d "/Library/Developer/CommandLineTools/SDKs/MacOSX26.5.sdk" ]]; then
+    SDK_ARGS=(--sdk "/Library/Developer/CommandLineTools/SDKs/MacOSX26.5.sdk")
+fi
+swift build --build-system native "${SDK_ARGS[@]}" -c "$CONFIG"
 BIN=".build/${CONFIG}/Olaz"
 
 APP="build/Olaz.app"
