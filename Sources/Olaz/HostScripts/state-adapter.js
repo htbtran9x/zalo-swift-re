@@ -249,7 +249,6 @@
           if (pubDebounce) return;
           pubDebounce = setTimeout(() => { pubDebounce = null; publish().catch((e) => diag('conversations publish failed: ' + e)); }, 120);
         };
-        };
         // Rows are posted as deltas: the first post carries every row with `reset: true`; later posts only the rows whose
         // JSON changed since they were last posted, plus the ids that left the index (`removed`). Swift merges by id
         // (ZaloEngine.mergeConversations), so a tick costs the bridge and the UI only what actually changed.
@@ -368,7 +367,6 @@
     const snapshot = () => {
       const root = document.querySelector('.login-qr-page') || document.querySelector('#app-page');
       if (!root) return null;
-      const invalid = !!root.querySelector('.qr--invalid, .qr-img-err, .off--qr-code, .login-qr__frame-qr .mask:not(.mask--none)');
       const isUsableQrImg = (i) => i && i.src && !i.className.includes('qr-image--none') && !i.src.startsWith('data:image/svg+xml;base64,PHN2ZyB3aWR0aD0iNDIi') && (i.naturalWidth === 0 || i.naturalWidth >= 64);
       const imgs = Array.from(root.querySelectorAll('img')).filter((i) => i.src && i.naturalWidth >= 64);
       const qrCandidate = root.querySelector('.qr-image img, img.qr-image, .login-qr__frame-qr img');

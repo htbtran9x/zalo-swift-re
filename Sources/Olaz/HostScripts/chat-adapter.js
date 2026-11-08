@@ -800,10 +800,6 @@
     }
     return out;
   };
-      } catch (e) { diag('mapOne ' + scrubErr(e)); } // one bad message must not stall the conversation
-    }
-    return out;
-  };
 
   // ---- reactions cache (official reaction cache; keyed by server msgId) ----
   const reactionsById = new Map();
@@ -946,7 +942,6 @@
     for (const e of entries) {
       next.set(e.row.id, e.sig);
       if (track.sigs.get(e.row.id) !== e.sig) changed.push(e.row);
-    }
     }
     const removed = [...track.sigs.keys()].filter((k) => !next.has(k));
     track.sigs = next;
