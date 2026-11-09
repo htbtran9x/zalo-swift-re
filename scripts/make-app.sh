@@ -17,11 +17,20 @@ fi
 swift build --build-system native "${SDK_ARGS[@]}" -c "$CONFIG"
 BIN=".build/${CONFIG}/Olaz"
 
+# The fingerprint helper (Chromium's TLS/HTTP2 for all requests); its absence is survivable —
+# Olaz falls back to URLSession — but releases always carry it.
+scripts/build-fingerprint-helper.sh
+
 APP="build/Olaz.app"
 rm -rf "$APP"
 mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
 
 cp "$BIN" "$APP/Contents/MacOS/Olaz"
+if [[ -x FingerprintHelper/build/olaz-fingerprint-helper ]]; then
+    cp FingerprintHelper/build/olaz-fingerprint-helper "$APP/Contents/MacOS/olaz-fingerprint-helper"
+else
+    echo "warning: fingerprint helper missing — the app will use URLSession" >&2
+fi
 cp Assets/olaz.icns "$APP/Contents/Resources/AppIcon.icns"
 
 # SwiftPM resource bundle (JSModules/, Resources/) — found via ResourceLocator.
@@ -69,8 +78,18 @@ fi
 
 if [[ -n "$SIGN_IDENTITY" ]]; then
     echo "Signing with identity: $SIGN_IDENTITY"
-    codesign --force --sign "$SIGN_IDENTITY" --entitlements scripts/Olaz.entitlements "$APP"
+    SIGN_ARGS=(--force --sign "$SIGN_IDENTITY")
+    if [[ "$SIGN_IDENTITY" == *"Developer ID"* ]]; then
+        SIGN_ARGS=(--force --timestamp --options runtime --sign "$SIGN_IDENTITY")
+    fi
+    if [[ -x "$APP/Contents/MacOS/olaz-fingerprint-helper" ]]; then
+        codesign "${SIGN_ARGS[@]}" "$APP/Contents/MacOS/olaz-fingerprint-helper"
+    fi
+    codesign "${SIGN_ARGS[@]}" --entitlements scripts/Olaz.entitlements "$APP"
 else
+    if [[ -x "$APP/Contents/MacOS/olaz-fingerprint-helper" ]]; then
+        codesign --force --sign - "$APP/Contents/MacOS/olaz-fingerprint-helper"
+    fi
     codesign --force --sign - --entitlements scripts/Olaz.entitlements "$APP"
 fi
 
