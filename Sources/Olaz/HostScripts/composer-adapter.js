@@ -99,6 +99,14 @@
         if (!M.modal && ex.ModalManagerV2 && has(ex.ModalManagerV2, 'openModal', 'closeModal')) M.modal = ex.ModalManagerV2;
         for (const o of [ex, ex.default, ex.a]) {
           if (!real(o) || (typeof o !== 'object' && typeof o !== 'function')) continue;
+          if (typeof o.uploadOptions === 'function' && !o.uploadOptions.__olazPatched) {
+            const orig = o.uploadOptions;
+            o.uploadOptions = function (extData) {
+              if (!extData || typeof extData !== 'object') return null;
+              try { return orig.call(this, extData); } catch (e) { return null; }
+            };
+            o.uploadOptions.__olazPatched = true;
+          }
           if (!M.lang && has(o, 'str', 'trans', 'currentLanguage')) M.lang = o;
           if (!M.toast && has(o, 'createError', 'createMessagev2', 'createMessageCustom', '_createDom')) M.toast = o;
           if (!M.utils && has(o, 'isValidFileName', 'isEnableUpEecx', 'getExtension')) M.utils = o;
@@ -367,19 +375,27 @@
       const exts = photoExts();
       const photos = files.filter((f) => exts.includes(extOf(f.name)));
       const others = files.filter((f) => !photos.includes(f));
-      if (photos.length === 1 && !others.length && title) {
+      if (photos.length) {
         const targetConv = Object.assign({}, box.info);
-        const opts = { isPasted: false, isUploaded: true, withoutPreview: true, targetConv, title, sendSource: SRC().Photo.CLICK_ICON_SEND_PHOTO };
-        try {
-          await box.cc._uploadDragPhoto(photos[0], opts);
-        } catch (e) {
-          if (!e || !e.code) throw e;
-          safe(() => M.overlimit && M.overlimit.b({ [e.code]: [photos[0]] }, box.cc.windowId, box.cc._sendOverlimitPhoto.bind(box.cc, targetConv)), null);
+        for (let i = 0; i < photos.length; i++) {
+          const photo = photos[i];
+          const opts = {
+            isPasted: false,
+            isUploaded: true,
+            withoutPreview: true,
+            targetConv,
+            sendSource: SRC().Photo.CLICK_ICON_SEND_PHOTO
+          };
+          if (photos.length === 1 && title) opts.title = title;
+          try {
+            await box.cc._uploadDragPhoto(photo, opts);
+          } catch (e) {
+            if (!e || !e.code) throw e;
+            safe(() => M.overlimit && M.overlimit.b({ [e.code]: [photo] }, box.cc.windowId, box.cc._sendOverlimitPhoto.bind(box.cc, targetConv)), null);
+          }
         }
-      } else {
-        if (photos.length) await box.cc._uploadImg({ target: { files: photos, value: '' } }, Object.assign({}, box.info), SRC().Photo.CLICK_ICON_SEND_PHOTO, false);
-        if (others.length) uploadAsFiles(box, others);
       }
+      if (others.length) uploadAsFiles(box, others);
       diag(`media photos=${photos.length} files=${others.length}`);
       return { status: 'done' };
     });

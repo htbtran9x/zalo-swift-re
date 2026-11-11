@@ -592,7 +592,7 @@ final class ZaloEngine {
     /// The QR `<img>` source as image bytes. The server's QR is a base64 PNG, but the official renderer draws the
     /// self-generated / trusted-device QRs (`genSecondQR`, and `genFirstQR` in that mode) itself as
     /// `data:image/svg+xml;utf8,<percent-encoded SVG>`; `NSImage(data:)` renders either.
-    static func decodeDataURL(_ url: String) -> Data? {
+    nonisolated static func decodeDataURL(_ url: String) -> Data? {
         guard url.hasPrefix("data:"), let comma = url.firstIndex(of: ",") else { return nil }
         let header = url[..<comma], payload = String(url[url.index(after: comma)...])
         if header.hasSuffix(";base64") { return Data(base64Encoded: payload) }

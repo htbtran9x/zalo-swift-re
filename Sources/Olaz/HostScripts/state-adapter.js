@@ -55,6 +55,17 @@
     const patchBoundaries = () => {
       let n = 0;
       eachExport(req, (ex) => {
+        if (!ex || (typeof ex !== 'object' && typeof ex !== 'function')) return;
+        for (const candidate of [ex, ex.default, ex.a]) {
+          if (candidate && typeof candidate.uploadOptions === 'function' && !candidate.uploadOptions.__olazPatched) {
+            const orig = candidate.uploadOptions;
+            candidate.uploadOptions = function (extData) {
+              if (!extData || typeof extData !== 'object') return null;
+              try { return orig.call(this, extData); } catch (e) { return null; }
+            };
+            candidate.uploadOptions.__olazPatched = true;
+          }
+        }
         if (typeof ex !== 'function' || typeof ex.getDerivedStateFromError !== 'function') return;
         const proto = ex.prototype;
         if (!proto || typeof proto.componentDidCatch !== 'function' || proto.componentDidCatch.__olaz) return;

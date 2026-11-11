@@ -103,7 +103,7 @@ struct SharedMediaTile: View {
         case .photo(let url, let width, let height):
             PhotoView(url: url, width: width, height: height, conversationId: conversationId, messageId: message.id,
                       senderName: message.isMine ? "Bạn" : message.senderName, date: message.date,
-                      encrypted: message.isE2EE || url?.query?.contains("e2esession") == true, tile: side)
+                      encrypted: (message.isE2EE || url?.query?.contains("e2esession") == true) && url?.scheme != "data", tile: side)
                 .contextMenu {
                     Button("Hiển thị trong Finder", systemImage: "folder") {
                         Task { await ChatFiles.showPhotoInFinder(url: url, conversationId: conversationId, messageId: message.id, date: message.date, engine: engine) }

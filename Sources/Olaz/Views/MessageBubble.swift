@@ -436,7 +436,7 @@ struct MessageRow: View {
             VStack(alignment: mine ? .trailing : .leading, spacing: 4) {
                 PhotoView(url: url, width: w, height: h, conversationId: message.conversationId, messageId: message.id,
                           senderName: mine ? "Bạn" : message.senderName, date: message.date,
-                          encrypted: message.isE2EE || url?.query?.contains("e2esession") == true)
+                          encrypted: (message.isE2EE || url?.query?.contains("e2esession") == true) && url?.scheme != "data")
                 caption
             }
         case .gif(let url):
@@ -745,6 +745,10 @@ struct PhotoView: View {
     @Environment(ZaloEngine.self) private var engine
     @Environment(ShellModel.self) private var shell
 
+    private var isEncrypted: Bool {
+        encrypted && url?.scheme != "data"
+    }
+
     private var radius: CGFloat { tile == nil ? 16 : 8 }
 
     private var size: CGSize {
@@ -760,7 +764,7 @@ struct PhotoView: View {
         RemoteImage(url: url, contentMode: .fill, maxPixelSize: max(size.width, size.height) * 2) {
             Rectangle().fill(.quaternary).overlay { ProgressView().controlSize(.small) }
         }
-        .resolvingWith(first: encrypted) { force in
+        .resolvingWith(first: isEncrypted) { force in
             await engine.resolveMedia(conversationId: conversationId, messageId: messageId, kind: .photo, force: force)
         }
         .onFailure { reason, retry in MediaFailureView(failure: reason, retry: retry) }
